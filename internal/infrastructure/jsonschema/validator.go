@@ -51,6 +51,11 @@ type Schema struct {
 	MaxItems             *int               `json:"maxItems"`
 	AdditionalProperties *bool              `json:"additionalProperties"`
 	Description          string             `json:"description"`
+
+	// desconocidas recuerda las palabras clave del schema original que este
+	// validador ignora. No lleva etiqueta JSON a proposito: no es parte del
+	// schema, es metadato del parseo, y Codificar no debe emitirlo.
+	desconocidas []string
 }
 
 // palabrasClaveConocidas delimita el subconjunto soportado.
@@ -77,10 +82,19 @@ var palabrasClaveConocidas = map[string]bool{
 // PalabrasClaveDesconocidas devuelve las palabras clave del schema que este
 // validador ignora.
 //
-// Un resultado no vacio no es un error, pero debe Tomato como aviso: una
+// Un resultado no vacio no es un error, pero debe tractarse como aviso: una
 // palabra clave ignorada es una regla de validacion que NO se aplica.
 func (s *Schema) PalabrasClaveDesconocidas() []string {
-	return nil // se calcula en ParseSchema, donde se dispone del JSON crudo
+	if s == nil || len(s.desconocidas) == 0 {
+		return nil
+	}
+
+	// Se devuelve una copia: el schema es compartido por todos los intentos de
+	// extraccion y el llamante no debe poder alterar su estado.
+	copia := make([]string, len(s.desconocidas))
+	copy(copia, s.desconocidas)
+
+	return copia
 }
 
 // Error describe una violacion concreta del schema.
@@ -415,7 +429,13 @@ func ParseSchema(documento []byte) (*Schema, []string, error) {
 	}
 
 	desconocidas := palabrasClaveDesconocidas(crudo)
-	return &schema, desconocidas, nil
+
+	// El mismo schema puede repetir una palabra clave en varios nodos. Se
+	// deduplica y ordena para que el aviso sea estable entre ejecuciones y
+	// para que no dependa del orden de iteracion de un mapa.
+	schema.desconocidas = unicasYOrdenadas(desconocidas)
+
+	return &schema, schema.desconocidas, nil
 }
 
 // palabrasClaveDesconocidas recorre el schema buscando palabras clave fuera del
@@ -488,4 +508,26 @@ func unique(valores []string) []string {
 	}
 
 	return salida
+}
+
+// unicasYOrdenadas deduplica y ordena una lista de palabras clave.
+func unicasYOrdenadas(valores []string) []string {
+	if len(valores) == 0 {
+		return nil
+	}
+
+	vistos := make(map[string]bool, len(valores))
+	resultado := make([]string, 0, len(valores))
+
+	for _, valor := range valores {
+		if vistos[valor] {
+			continue
+		}
+		vistos[valor] = true
+		resultado = append(resultado, valor)
+	}
+
+	sort.Strings(resultado)
+
+	return resultado
 }
