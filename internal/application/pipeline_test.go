@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
+	"time"
 
 	"talkaboutthis/internal/application"
 	"talkaboutthis/internal/domain"
@@ -21,10 +22,27 @@ type extractorFalso struct {
 	extraccion *domain.MeetingBacklogExtraction
 	err        error
 	llamadas   int
+
+	// retraso hace que el extractor tarde una cantidad conocida de tiempo.
+	//
+	// No es cosmetico: sin el, el pipeline completo termina en menos de un
+	// milisegundo y la resolucion del reloj del sistema devuelve 0 para
+	// time.Since, con lo que cualquier asercion sobre Duracion depende de la
+	// granularidad del reloj y no del comportamiento del pipeline. Fijar el
+	// retraso convierte la asercion en una prueba determinista.
+	retraso time.Duration
 }
 
 func (e *extractorFalso) Ejecutar(ctx context.Context, transcript string) (*domain.MeetingBacklogExtraction, error) {
 	e.llamadas++
+
+	if e.retraso > 0 {
+		select {
+		case <-time.After(e.retraso):
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
 
 	if e.err != nil {
 		return nil, e.err
@@ -113,7 +131,9 @@ func TestNewPipelineExigeLasTresDependencias(t *testing.T) {
 
 // TestPipelineDryRunCompleto recorre el flujo entero sin tocar la red.
 func TestPipelineDryRunCompleto(t *testing.T) {
-	ext := &extractorFalso{extraccion: extraccionDePrueba()}
+	const retraso = 25 * time.Millisecond
+
+	ext := &extractorFalso{extraccion: extraccionDePrueba(), retraso: retraso}
 
 	// El tablero falla el test si se invoca: es la forma mas fuerte de
 	// comprobar que el pipeline respeta el modo dry-run.
@@ -136,8 +156,11 @@ func TestPipelineDryRunCompleto(t *testing.T) {
 		t.Errorf("JobID = %q, se esperaba job-test-1", resultado.JobID)
 	}
 
-	if resultado.Duracion <= 0 {
-		t.Error("la duracion deberia medirse")
+	// La duracion se compara contra el retraso conocido del extractor, no
+	// contra cero. Un pipeline que no midiese devolveria 0 y este test lo
+	// detectaria igual, pero sin depender de la resolucion del reloj.
+	if resultado.Duracion < retraso {
+		t.Errorf("Duracion = %s, se esperaba al menos %s", resultado.Duracion, retraso)
 	}
 
 	if ext.llamadas != 1 {
