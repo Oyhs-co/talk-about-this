@@ -56,7 +56,7 @@ type ResolvedorDeIdentidades = domain.IdentityMapper
 
 // ResumenDespacho es el resultado de la etapa de despacho.
 type ResumenDespacho struct {
-	// Items son los items que se考虑aron publicar, ya con handle resuelto.
+	// Items son los items que se consideran publicar, ya con handle resuelto.
 	Items []domain.ActionItem
 	// Omitidos son los items descartados por la politica "skip".
 	Omitidos []domain.ActionItem
@@ -162,7 +162,7 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 		// Se devuelven los items tal cual, sin resolver identidades: el dry-run
 		// muestra lo que el LLM extrajo, que es exactamente lo que el usuario
 		// quiere revisar antes de publicar nada.
-		slog.Info("modo dry-run: no se publica nada",
+		loggerDe(ctx).Info("modo dry-run: no se publica nada",
 			slog.Int("items", len(items)),
 		)
 
@@ -202,7 +202,7 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 		}
 	}
 
-	slog.Info("publicacion terminada",
+	loggerDe(ctx).Info("publicacion terminada",
 		slog.String("plataforma", p.tablero.PlatformName()),
 		slog.Int("publicados", exitos),
 		slog.Int("fallidos", fallos),
@@ -213,7 +213,7 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 	// Devolver error aqui haria que el usuario creyera que no se publico nada,
 	// cuando en realidad cinco de seis tarjetas existen.
 	if fallos > 0 {
-		slog.Warn("algunos items no se publicaron",
+		loggerDe(ctx).Warn("algunos items no se publicaron",
 			slog.Int("fallidos", fallos),
 		)
 	}
