@@ -1,0 +1,23 @@
+{
+  "$comment": "Tabla de aliases para el IdentityMapper (RF-04). Traduce nombres reales hallados en las minutas a handles válidos de la plataforma destino. La búsqueda es case-insensitive y por coincidencia exacta. Este archivo NO contiene secretos: solo identidades públicas de trabajo.",
+  "version": "1.0",
+  "defaults": {
+    "default_handle": "",
+    "default_priority": "MEDIUM",
+    "unknown_assignee_policy": "fail"
+  },
+  "mappings": [
+    {
+      "raw_names": ["Omar Hernández", "Omar Hernan", "Omar Yesid Hernández Sotelo"],
+      "handle": "omarhernan",
+      "platforms": ["github"],
+      "email": "omar@example.com"
+    },
+    {
+      "raw_names": ["Ana", "Ana María Ruiz"],
+      "handle": "anaruiz",
+      "platforms": ["github"],
+      "email": "ana@example.com"
+    }
+  ]
+}

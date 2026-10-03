@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://talk-about-this.dev/specifications/backlog_schema.json",
+  "title": "MeetingBacklogExtraction",
+  "description": "Contrato de intercambio de datos entre el motor LLM y el dominio. El LLM debe producir un payload que valide contra este schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "meeting_summary": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Resumen conciso de la reunión origen de los ítems."
+    },
+    "action_items": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ítems accionables extraídos de la transcripción.",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "title": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 100,
+            "description": "Título imperativo y autocontenido de la tarea."
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Contexto, criterios de aceptación y dependencias."
+          },
+          "assignee_name": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Nombre real o mención textual tal como aparece en la minuta. Se resuelve a un handle en la etapa de IdentityMapper."
+          },
+          "priority": {
+            "type": "string",
+            "enum": ["HIGH", "MEDIUM", "LOW"]
+          },
+          "labels": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "minLength": 1
+            },
+            "description": "Etiquetas de dominio. Puede ser un arreglo vacío."
+          },
+          "story_points": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Estimación de esfuerzo. Opcional; si se omite se trata como no estimado."
+          }
+        },
+        "required": [
+          "title",
+          "description",
+          "assignee_name",
+          "priority",
+          "labels"
+        ]
+      }
+    }
+  },
+  "required": ["meeting_summary", "action_items"]
+}
