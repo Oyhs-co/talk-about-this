@@ -1,0 +1,34 @@
+# --- Binarios y artefactos de compilacion ---
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+*.prof
+
+# --- Configuracion local y secretos (RNF-04: cero secretos en disco versionado) ---
+.env
+.env.*
+!.env.example
+configs/mappings.json
+configs/*.local.json
+!configs/mappings.example.json
+
+# --- Dependencias ---
+vendor/
+
+# --- Editores y SO ---
+.idea/
+.vscode/
+*.swp
+.DS_Store
+Thumbs.db
+
+# --- Herramientas locales de agente ---
+.freebuff/
+.kilo/
