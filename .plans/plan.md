@@ -5,8 +5,8 @@
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
 **Estado actual:** esqueleto preparado (estructura, `go.mod`, schema, configuración, tooling).
-**Fases 1 y 2: COMPLETADAS** (dominio y contratos; parsers e ingesta).
-**Fases restantes:** 3 (LLM + Retry), 4 (Identidad + GitHub), 5 (CLI).
+**Fases 1, 2 y 3: COMPLETADAS** (dominio; parsers e ingesta; LLM y Retry Loop).
+**Fases restantes:** 4 (Identidad + GitHub Projects), 5 (CLI).
 
 ---
 
@@ -146,41 +146,70 @@ gofmt -l .       # sin salida
 
 ---
 
-## Fase 3 — Proveedores de LLM y Retry Loop
+## Fase 3 — Proveedores de LLM y Retry Loop ✅ COMPLETADA
 
 **Objetivo:** extracción estructurada confiable, con auto-corrección. (RF-02, RF-03, RF-07, TC-02, TC-03)
 
-### Tareas
+### Resultado
 
-1. `internal/infrastructure/llm/ollama.go` — `POST /api/chat` con `format: "json"` o el schema.
-2. `internal/infrastructure/llm/openai.go` — `/v1/chat/completions` con `response_format: json_schema`.
-3. `internal/infrastructure/llm/anthropic.go` y `gemini.go` — stubs compilando que **sí** implementan la interfaz, para no bloquear extensibilidad.
-4. `internal/infrastructure/llm/prompt.go` — construcción del prompt: instrucciones + schema embebido + transcript + regla "solo JSON".
-5. `internal/infrastructure/llm/validate.go` — validación de la respuesta contra el schema.
-6. `internal/infrastructure/llm/retry.go` — **Retry Loop**: máx. 3 intentos; en cada fallo de validación, reintentar adjuntando el error de parseo literal para que el modelo se autocorrija. Backoff exponencial entre intentos.
-7. `internal/application/extract_backlog.go` — caso de uso que orquesta: prompt → provider → validar → retry → `MeetingBacklogExtraction`.
-8. Cliente HTTP común con **timeout explícito** y una función de fábrica compartida (`NewHTTPClient`).
+| Entregable | Archivo | Estado |
+| --- | --- | --- |
+| Validador de JSON Schema | `internal/infrastructure/jsonschema/validator.go` | Hecho (subconjunto draft-07, sin dependencias) |
+| Cliente HTTP compartido | `internal/infrastructure/llm/client.go` | Hecho (timeout, tope de tamaño, backoff) |
+| Provider Ollama | `internal/infrastructure/llm/ollama.go` | Hecho |
+| Provider OpenAI | `internal/infrastructure/llm/openai.go` | Hecho |
+| Provider Anthropic | `internal/infrastructure/llm/anthropic.go` | Hecho (vía tools) |
+| Provider Gemini | `internal/infrastructure/llm/gemini.go` | Hecho (schema simplificado) |
+| Constructor de prompts | `internal/infrastructure/llm/prompt.go` | Hecho |
+| Retry Loop con autocorrección | `internal/application/extract_backlog.go` | Hecho |
 
-### Consideraciones
+**Verificación:** `gofmt` limpio, `go vet` limpio, **193 tests en verde**, llm al 91.7%, application al 87.5%, **cero dependencias externas**.
 
-- Todo el cliente HTTP debe ser inyectable para tests. `httptest.NewServer` en tests, nunca red real.
-- El error de auto-corrección va en el prompt del siguiente intento, no solo en el log.
-- El timeout aplica **por intento**, no al total, salvo que el diseño indique lo contrario.
+### Corrección respecto al plan original
+
+El plan ubicaba el Retry Loop en `internal/infrastructure/llm/retry.go`. Se implementó en **`internal/application/extract_backlog.go`** porque en la Fase 1 el contrato de `domain.LLMProvider` ya establecía que la validación y el Retry Loop son responsabilidad de la capa de aplicación (el adaptador solo devuelve bytes). Implementarlo en `llm` habría roto la dirección de imports documentada.
+
+Por el mismo motivo, el constructor de prompts se implementa en `llm` pero se consume en `application` mediante la interfaz `ConstructorDePrompt`, inyectada desde el composition root. Es el mismo patrón que `SelectorDeParser` en la Fase 2.
+
+### Decisiones tomadas en esta fase
+
+- **Validador de JSON Schema propio (subconjunto draft-07).** Una dependencia como `santhosh-tekuri/jsonschema` habría traido cientos de líneas para un uso de ~200. `go.mod` sigue sin un solo `require`. `ParseSchema` además reporta las palabras clave que **no** aplica, para que una regla no verificada no pase por verificada.
+- **La validación tiene tres capas**, porque cada una atrapa un fallo distinto: (1) sintaxis JSON, (2) forma según el schema, (3) invariantes del dominio. La tercera existe porque el schema no puede expresar que un título en blanco no es una tarea.
+- **Se acumulan TODOS los errores de validación**, no solo el primero: corregirlos de uno en uno agota los tres intentos.
+- **Un fallo del proveedor NO se reintenta con el mismo prompt.** Un error de red o de credencial no se arregla reformulando la petición; se propaga de inmediato y lo reintenta la política de red del cliente HTTP.
+- **Anthropic usa `tools`, no `response_format`.** Su API no expone json_schema; la salida estructurada llega en el bloque `tool_use`.
+- **Gemini normaliza el schema.** Su `responseSchema` acepta un subconjunto reducido y descarta en silencio lo que no entiende, así que se convierte antes de enviarlo. La validación fuerte sigue ocurriendo en la capa de aplicación.
+- **El backoff es configurable, no una constante de paquete.** Con 500 ms fijos, tres tests de reintento pagaban 4,5 s de reloj. Configurarlo bajo también sirve en producción contra servidores lentos.
+
+### Bugs reales encontrados y corregidos
+
+1. **La detección de palabras clave desconocidas reportaba los nombres de los campos del documento** (`action_items`, `meeting_summary`) como si fueran reglas del schema, y en cambio no bajaba al interior de las definiciones. Ahora distingue "clave de un nodo de esquema" de "nombre de campo". Lo detectó `TestSchemaRealDelProyectoValidaEs`.
+2. **Suite de `llm` tardaba 9,4 s** portests que pagaban el backoff real. Corregido haciendo `EsperaBase` configurable (suite a 3,0 s).
 
 ### Tests
 
-| ID | Qué se verifica |
-| --- | --- |
-| TC-02 | Respuesta de Ollama (fake) → `MeetingBacklogExtraction` sin error de `json.Unmarshal` |
-| TC-03 | JSON corrupto → reintento con contexto de error; `context.WithTimeout` respetado; máximo 3 intentos |
-| — | Respuesta que viola el enum de `priority` → error de validación, no default silencioso |
-| — | Cancelación del contexto propaga correctamente |
+| ID | Qué se verifica | Estado |
+| --- | --- | --- |
+| TC-02 | Ollama devuelve JSON que deserializa sin error de `json.Unmarshal` | ✅ |
+| TC-02 | El schema viaja en la petición (restricted decoding) | ✅ |
+| TC-03 | JSON corrupto → reintento con el error de sintaxis adjunto | ✅ |
+| TC-03 | Máximo 3 intentos, con `ErrReintentosAgotados` y la causa concreta | ✅ |
+| RF-07 | Los errores se acumulan entre intentos | ✅ |
+| RF-07 | Un fallo de proveedor no se reintenta con el mismo prompt | ✅ |
+| RNF-03 | Timeout por petición; el contexto cancela los reintentos | ✅ |
+| RNF-05 | Backoff exponencial en 5xx/429; no reintenta 4xx | ✅ |
+| RNF-04 | La credencial de Gemini no aparece en los errores | ✅ |
+| — | `additionalProperties: false` rechaza claves inventadas por el LLM | ✅ |
+| — | El schema real del proyecto no usa palabras clave sin aplicar | ✅ |
 
-### Criterio de salida
+### Criterio de salida — cumplido
 
 ```bash
-make test
-# ningún test sale a la red; todos contra httptest
+go build ./...   # OK
+go vet ./...     # limpio
+go test ./...    # ok en los 7 paquetes
+gofmt -l .       # sin salida
+# ningún test sale a la red: todo con httptest o proveedores falsos
 ```
 
 ---
