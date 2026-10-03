@@ -17,7 +17,7 @@ import (
 
 // ErrTablaMapeoInvalida indica que mappings.json no se pudo cargar o no tiene
 // una forma utilizable.
-var ErrTablaMapeoInvalida = errors.New("la tabla de mapeo de identidades no es valida")
+var ErrTablaMapeoInvalida = errors.New("tabla de aliases invalida")
 
 // PoliticaDesconocido define que hacer cuando un nombre no aparece en la tabla.
 //
@@ -124,6 +124,26 @@ func NuevoJSONIdentityMapper(ruta string) (*JSONIdentityMapper, error) {
 	}
 
 	return NuevoJSONIdentityMapperDesdeBytes(datos)
+}
+
+// MapperVacio devuelve un mapper sin ningun alias, que no resuelve nada.
+//
+// Existe para el modo dry-run, donde las identidades NO se consultan: resolver
+// "Omar Hernandez" contra una tabla vacia daria el mismo resultado que no tener
+// tabla, y asi el mapper puede inyectarse sin exigir un archivo que el usuario
+// no va a necesitar hasta que decida publicar.
+//
+// NO usarlo fuera de dry-run: publicaria todo sin responsable, que es
+// exactamente el fallo silencioso que TC-04 existe para evitar.
+func MapperVacio() *JSONIdentityMapper {
+	m := &JSONIdentityMapper{
+		indice:     make(map[string]string),
+		politica:   PoliticaAsignarSinAsignado,
+		porDefecto: "",
+	}
+	m.construirIndice(nil)
+
+	return m
 }
 
 // NuevoJSONIdentityMapperDesdeBytes construye el mapper a partir del JSON.
