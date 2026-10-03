@@ -5,8 +5,8 @@
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
 **Estado actual:** esqueleto preparado (estructura, `go.mod`, schema, configuración, tooling).
-**Fase 1: COMPLETADA** (dominio, contratos, guardas arquitectónicas).
-**Fases restantes:** 2 (Parsers), 3 (LLM + Retry), 4 (Identidad + GitHub), 5 (CLI).
+**Fases 1 y 2: COMPLETADAS** (dominio y contratos; parsers e ingesta).
+**Fases restantes:** 3 (LLM + Retry), 4 (Identidad + GitHub), 5 (CLI).
 
 ---
 
@@ -87,39 +87,61 @@ go tool cover -func=coverage.out | awk '$3 != "100.0%"'  # domain 100%
 
 ---
 
-## Fase 2 — Parsers e ingesta
+## Fase 2 — Parsers e ingesta ✅ COMPLETADA
 
 **Objetivo:** cualquier `.md` / `.txt` / `.docx` → un `Transcript` limpio. (RF-01, TC-01)
 
-### Tareas
+### Resultado
 
-1. `internal/infrastructure/parsers/txt.go` — lector UTF-8, normalización de saltos de línea.
-2. `internal/infrastructure/parsers/markdown.go` — eliminar marcas de formato, front-matter y encabezados.
-3. `internal/infrastructure/parsers/docx.go` — extraer `word/document.xml` del contenedor OOXML (ZIP), concatenar `<w:t>` por párrafo respetando saltos.
-4. `parsers.go` (o `registry.go`) — `Registry` con `CanParse` + selección por extensión, con fallback a detección por cabecera cuando la extensión no sea fiable.
-5. `internal/application/ingest.go` — caso de uso: abre el archivo, elige parser, devuelve `Transcript`.
-6. Fixtures en `testdata/` (`.md`, `.txt`, `.docx` de ejemplo).
+| Entregable | Archivo | Estado |
+| --- | --- | --- |
+| Lectura y limpieza compartida | `internal/infrastructure/parsers/text.go` | Hecho |
+| Parser texto plano | `parsers/txt.go` | Hecho |
+| Parser Markdown | `parsers/markdown.go` | Hecho |
+| Parser DOCX (OOXML) | `parsers/docx.go` | Hecho |
+| Registro de parsers | `parsers/registry.go` | Hecho |
+| Caso de uso de ingesta | `internal/application/ingest.go` | Hecho |
+| Fixtures | `testdata/{reunion-equipo.md,notas-rapidas.txt,minuta.docx}` | Hecho |
+| Generador del fixture .docx | `scripts/make_docx_fixture.py` | Hecho |
+| Tests | `parsers_test.go`, `application/ingest_test.go` | Hecho |
 
-### Consideraciones
+**Verificación:** `gofmt` limpio, `go vet` limpio, **137 tests en verde**, parsers al 93.1%, application al 85.2%, **cero dependencias externas**.
 
-- La dependencia para `.docx` es **una** biblioteca mantenida (por ejemplo `github.com/nguyenthenguyen/docx` o lectura ZIP directa con `archive/zip` + `encoding/xml` de stdlib). **Preferir stdlib** si resulta viable: mantiene el objetivo de binario ligero sin dependencias pesadas.
-- TodoParser abre su `io.Reader` cerrado por el llamador; el `defer file.Close()` va en `application/ingest.go`.
-- Preservar UTF-8; eliminar BOM, espacios multiples y caracteres de control.
+### Decisiones tomadas en esta fase
+
+- **DOCX con `archive/zip` + `encoding/xml`, sin librerias de terceros.** Para este subconjunto de OOXML la dependencia externa no compensaba, y mantiene el objetivo de binario ligero de `INIT.md` §1. `go.mod` sigue sin un solo `require`.
+- **Los bloques de codigo Markdown se preservan intactos.** Una minuta que cita SQL o comandos contiene la especificacion exacta de la tarea; aplanarla produciria items inutiles.
+- **Los guiones bajos simples no se eliminan.** `snake_case` es codigo real y aparece mas que el cursivo en una transcripcion tecnica. Decision consciente, documentada en el codigo y protegida por test.
+- **La deteccion por contenido va ANTES que la extension.** Este orden es contraintuitivo y resulto ser la correccion mas importante de la fase (ver abajo).
+- **`<w:br/>` se conserva como salto de linea**, no como espacio. Aplanarlo producia frases sin puntuacion ("decision tomada Se descarta...") que el LLM interpreta peor.
+- **El fixture `.docx` se genera con un script**, no se versiona opaco: el XML que se parsea queda visible y auditable en `scripts/make_docx_fixture.py`.
+
+### Bugs reales encontrados y corregidos durante la fase
+
+1. **La deteccion por contenido nunca se ejecutaba.** `seleccionarParser` consultaba primero la extension y solo caia al contenido si la extension fallaba. Pero el caso que motiva la funcion —un `.docx` exportado desde Word guardado como `.txt`— tiene una extension PERFECTAMENTE VALIDA, asi que el parser de texto plano ganaba y devolvia bytes comprimidos como prosa. Se invirtio el orden: primero contenido, luego extension. Cubierto por `TestIngestaDocxConExtensionIncorrecta`.
+2. **Cursiva Markdown asimetrica.** La heuristica de asteriscos simples quitaba la apertura de `*Ana*` y dejaba el cierre, produciendo `Ana* revisara`. Se reescribio con deteccion de limites de palabra, simetrica para apertura y cierre, sin tocar `2*3`. Cubierto por `TestMarkdownCursivaSimetrica`.
+3. **`zip.NewReader` con `io.LimitReader`** no compila: el primero exige `io.ReaderAt` y el segundo solo devuelve `io.Reader`. Se leen los bytes con techo y se pasa un `bytes.Reader`.
 
 ### Tests
 
-| ID | Qué se verifica |
-| --- | --- |
-| TC-01 | `.docx` con párrafos y listas → string UTF-8 limpio; sin fuga de file descriptors |
-| — | `.md` con front-matter y títulos → solo texto |
-| — | Extensión desconocida → error claro, no panic |
-| — | `CanParse` correcto por parser |
+| ID | Qué se verifica | Estado |
+| --- | --- | --- |
+| TC-01 | `.docx` real → texto UTF-8 limpio, sin marcado XML residual | ✅ |
+| TC-01 | Sin fuga de descriptores (200 documentos seguidos) | ✅ |
+| — | `.md`: front-matter eliminado, formato quitado, codigo preservado | ✅ |
+| — | `.txt`: BOM eliminado, CRLF normalizado, UTF-8 invalido tolerado | ✅ |
+| — | Extension desconocida → `ErrFormatoNoSoportado` con formatos soportados listados | ✅ |
+| — | `.docx` renombrado a `.txt` → detectado por contenido | ✅ |
+| TC-07 | Registrar un parser nuevo sin tocar codigo de produccion | ✅ |
+| RNF-03 | Ingesta dentro del presupuesto de tiempo | ✅ |
 
-### Criterio de salida
+### Criterio de salida — cumplido
 
 ```bash
-make test && make cover
-# ingest de cada fixture sin panic y sin fuga de FDs
+go build ./...   # OK
+go vet ./...     # limpio
+go test ./...    # ok en los 5 paquetes
+gofmt -l .       # sin salida
 ```
 
 ---
