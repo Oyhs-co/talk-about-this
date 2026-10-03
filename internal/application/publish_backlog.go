@@ -64,6 +64,14 @@ type ResumenDespacho struct {
 	Publicados []domain.PublishResult
 	// Modo indica si hubo publicacion real.
 	Modo ModoSalida
+	// Plataforma identifica el tablero donde se publico, tal y como lo declara
+	// domain.ProjectBoardAdapter.
+	//
+	// Sin este campo, la salida JSON de una ejecucion en modo publish no dice
+	// DONDE acabaron las tarjetas. Un tablero equivocado pasaria desapercibido,
+	// y el valor ya estaba disponible en el propio puerto: solo faltaba
+	// transportarlo.
+	Plataforma string
 }
 
 // ResumenDePublicacion cuenta los exitos y fallos, para el log final.
@@ -166,7 +174,11 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 			slog.Int("items", len(items)),
 		)
 
-		return &ResumenDespacho{Items: items, Modo: ModoDryRun}, nil
+		return &ResumenDespacho{
+			Items:      items,
+			Modo:       ModoDryRun,
+			Plataforma: p.tablero.PlatformName(),
+		}, nil
 	}
 
 	if modo != ModoPublish {
@@ -180,9 +192,10 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 
 	if len(preparados) == 0 {
 		return &ResumenDespacho{
-			Items:    nil,
-			Omitidos: omitidos,
-			Modo:     modo,
+			Items:      nil,
+			Omitidos:   omitidos,
+			Modo:       modo,
+			Plataforma: p.tablero.PlatformName(),
 		}, nil
 	}
 
@@ -223,6 +236,7 @@ func (p *PublicarBacklog) Ejecutar(ctx context.Context, projectRef string, items
 		Omitidos:   omitidos,
 		Publicados: publicados,
 		Modo:       modo,
+		Plataforma: p.tablero.PlatformName(),
 	}, nil
 }
 
