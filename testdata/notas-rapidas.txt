@@ -1,0 +1,9 @@
+Notas rápidas del 1 de octubre.
+
+Pendientes:
+- Omar: revisar PR #412
+- Ana: escribir la guía de instalación
+- Luis: actualizar las dependencias
+
+Decisión tomada: se descarta la migración a la base de datos nueva
+por ahora. Se revisa en el trimestre siguiente.
