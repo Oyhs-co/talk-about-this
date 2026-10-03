@@ -128,8 +128,29 @@ func (promptPorDefecto) Construir(transcript, schemaJSON string) string {
 	return transcript + "\n\nResponde solo con JSON que cumpla este esquema:\n" + schemaJSON
 }
 
+// ConstruirCorreccion reenvia la transcripcion Y el diagnostico del fallo.
+//
+// Devolver solo el transcript, como hacia la primera version, convertia el
+// reintento en una segunda tirada ciega: la misma peticion con distinto
+// muestreo, sin ninguna pista sobre que fallo. El modelo no puede adivinar
+// cual de varios requisitos incumplidos corregir, de modo que los tres
+// intentos se agotaban con la misma respuesta invalida (TC-03).
 func (promptPorDefecto) ConstruirCorreccion(transcript, schemaJSON string, errores []string) string {
-	return transcript
+	var b strings.Builder
+
+	b.WriteString(transcript)
+	b.WriteString("\n\nLa respuesta anterior NO era valida. Errores detectados:\n")
+
+	for _, err := range errores {
+		b.WriteString("- ")
+		b.WriteString(err)
+		b.WriteString("\n")
+	}
+
+	b.WriteString("\nCorrige esos errores y responde de nuevo solo con JSON que cumple este esquema:\n")
+	b.WriteString(schemaJSON)
+
+	return b.String()
 }
 
 // Ejecutar extrae el backlog, reintentando con autocorreccion.
