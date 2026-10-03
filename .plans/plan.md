@@ -5,7 +5,7 @@
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
 **Estado actual:** producto completo. **Fases 1 a 5: COMPLETADAS.**
-**Estado:** 390 tests en verde, cero dependencias externas, cobertura global 90,7%, dominio al 100%.
+**Estado:** 310 tests en verde en 11 paquetes, cero dependencias externas, cobertura global 93,4%, dominio al 100%. Documentación completa en `docs/` (4 familias, 39 documentos, Mermaid embebido).
 
 ---
 
@@ -414,11 +414,112 @@ Matriz TC-01 … TC-07 en verde, sin ningún test que dependa de red o credencia
 | Riesgo | Impacto | Mitigación |
 | --- | --- | --- |
 | Respuestas del LLM con JSON inconsistente | Alto | Retry Loop con auto-corrección (RF-07) + validación estricta |
-| Limitaciones de rate limit en GitHub | Medio | Backoff exponencial + `errgroup` con límite de concurrencia |
+| Limitaciones de rate limit en GitHub | Medio | Backoff exponencial + `WaitGroup` con semáforo de 4 (sin `errgroup`: RNF-01) |
 | Fuga de secretos en logs | Alto | Tokens fuera de `slog`; tests que escanean la salida en busca de `ghp_` |
 | `.docx` con XML malformado | Medio | Validar antes de parsear; error claro en lugar de panic |
 | Acoplamiento accidental del dominio | Alto | Test de imports en Fase 1 + revisión de `AGENTS.md` §1 |
 | Dependencias que engordan el binario | Medio | Preferencia explícita por stdlib; auditar `go mod tidy` en cada fase |
+
+---
+
+# Sesión de cierre: tests que faltaban y documentación
+
+## 1. Tests añadidos
+
+Se cerró la cobertura por función, no por paquete, buscando lo que estaba por
+debajo del 80 %.
+
+| Fichero | Qué cubre |
+| --- | --- |
+| `internal/application/casos_de_borde_test.go` | Prompt por defecto, reloj inyectado, `ErrorEtapa.Unwrap`, `ExtensionDe` |
+| `internal/application/extensibilidad_test.go` | **TC-07**: un `JiraAdapter` externo compila y se enchufa |
+| `internal/infrastructure/jsonschema/bordes_test.go` | Orden determinista, palabras no soportadas, nombres de tipo en los mensajes |
+| `internal/infrastructure/adapters/github_graphql_interno_test.go` | `consultarProjectID`, `resolverNodeID` sin cache stampede |
+| `internal/infrastructure/identity/mapper_vacio_test.go` | `MapperVacio` (dry-run), tabla completa de acentos |
+| `internal/infrastructure/parsers/registry_test.go` | `ExtensionDeRuta`, selección de parser, detección por contenido |
+| `internal/infrastructure/llm/nombres_test.go` | `Name()` de los cuatro + contrato del puerto |
+| `cmd/talkaboutthis/output_test.go` | Formateadores, códigos de etapa, ayuda de `ingest` |
+| `pkg/sdk/frontera_test.go` | Las dos reglas de la reserva |
+
+## 2. Bugs encontrados por esos tests
+
+Ninguno lo detectó la revisión del código. Seis:
+
+| # | Bug | Consecuencia |
+| --- | --- | --- |
+| 1 | `promptPorDefecto.ConstruirCorreccion` devolvía solo el transcript | El reintento era **ciego**: tres intentos idénticos (violaba TC-03) |
+| 2 | `PalabrasClaveDesconocidas()` devolvía `nil` siempre | Método público que miente; el aviso de reglas no aplicadas no existía |
+| 3 | `modoDe(nil)` hacía panic | Un fallo de renderizado tumbaba el proceso **después** del trabajo |
+| 4 | `tituloEnLinea` dejaba doble espacio con `\r\n` | Desalineaba la tabla |
+| 5 | `salidaDespacho.Plataforma` nunca se rellenaba | La salida JSON **nunca decía dónde se publicó** |
+| 6 | `TestPipelineDryRunCompleto` fallaba en Windows | `time.Since` devolvía 0 por granularidad del reloj, no por comportamiento |
+
+## 3. Test de contrato TC-07
+
+El caso aparecía en la matriz de `AGENTS.md` sin que nada lo demostrara. Ahora
+`internal/application/extensibilidad_test.go` contiene un `JiraAdapter` completo,
+heterogéneo a propósito (respuesta = hilo de comentarios, no issue), que se enchufa
+en `PublicarBacklog` y en `Pipeline`.
+
+**Verificado por inyección de regresión**: añadir un método a
+`domain.ProjectBoardAdapter` rompe la compilación de ese test.
+
+## 4. `pkg/sdk`
+
+Decisión: dejarla como **reserva vacía con reglas vigiladas**, no poblarla.
+
+- `pkg/sdk/README.md` — qué es, por qué, cuándo llenarla.
+- `pkg/sdk/frontera_test.go` — regla 1: `pkg/sdk` no importa `internal/`.
+  Regla 2: `internal/` no importa `pkg/sdk`. Ya existía la regla 3 en
+  `internal/domain/architecture_test.go`.
+
+Rellenarla ahora sería deuda permanente sin demanda real. Ver
+[`docs/adr/0010`](../../docs/adr/0010-sdk-publico-en-pkg.md).
+
+## 5. Documentación
+
+39 documentos en `docs/`, todos los diagramas en **Mermaid embebido**:
+
+| Familia | Documentos | Contenido |
+| --- | --- | --- |
+| `docs/architecture/` | 6 + 6 flujos | Las cuatro capas, cada módulo modelado, seis flujos con diagrama |
+| `docs/adr/` | README + plantilla + 10 | Las decisiones no obvias, con alternativas y consecuencias malas |
+| `docs/specs/` | README + 7 | Un RF por documento, más la trazabilidad completa |
+| `docs/criticas/` | README + 5 | Los cinco compromisos que no se pueden romper |
+
+Se comprobó que los **152 nombres de test citados existen** en el repositorio.
+
+## 6. Verificación final — ejecutada
+
+```bash
+gofmt -l .                  # vacío
+go vet ./...                # limpio
+go test ./... -count=1      # ok en 11 paquetes, 310 tests
+grep -c require go.mod      # 0
+```
+
+| Paquete | Antes | Ahora |
+| --- | --- | --- |
+| `internal/domain` | 100,0% | **100,0%** |
+| `internal/infrastructure/identity` | 90,0% | **98,7%** |
+| `internal/application` | 93,5% | **96,4%** |
+| `internal/infrastructure/logging` | 93,8% | 93,8% |
+| `internal/infrastructure/parsers` | 93,1% | **93,3%** |
+| `internal/infrastructure/adapters` | 89,1% | **93,0%** |
+| `internal/infrastructure/llm` | 91,7% | **92,7%** |
+| `cmd/talkaboutthis` | 90,7% | **92,3%** |
+| `internal/infrastructure/jsonschema` | 78,0% | **89,4%** |
+| `docs/specifications` | 75,0% | 75,0% |
+| `pkg/sdk` | — | guarda de frontera |
+| **Total** | **90,7%** | **93,4%** |
+
+Los cinco huecos que seguían en pie, y su motivo:
+
+| Hueco | Por qué no se cierra |
+| --- | --- |
+| `main()` en `cmd` | Hace `os.Exit`; se prueba `ejecutar()`, que es el 90 % |
+| Caminos profundos de `llm/client.go` | Requieren un servidor que simule timeouts reales |
+| `docs/specifications` al 75 % | La parte sin cubrir son rutas de error de un schema que va incrustado |
 
 ---
 

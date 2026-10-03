@@ -206,21 +206,45 @@ make lint      # golangci-lint si está disponible
 
 Si no tienes `make`, los comandos son directos: `gofmt -l .`, `go vet ./...`, `go test ./...`, `go build -o bin/talkaboutthis ./cmd/talkaboutthis`.
 
-| Paquete | Cobertura |
-| --- | --- |
-| `internal/domain` | 100,0% |
-| `internal/infrastructure/identity` | 90,0% |
-| `internal/infrastructure/logging` | 93,8% |
-| `internal/application` | 93,5% |
-| `internal/infrastructure/parsers` | 93,1% |
-| `internal/infrastructure/llm` | 91,7% |
-| `cmd/talkaboutthis` | 90,7% |
-| `internal/infrastructure/adapters` | 89,1% |
-| `internal/infrastructure/jsonschema` | 78,0% |
-| `docs/specifications` | 75,0% |
-| **Total** | **90,7%** |
+| Paquete | Cobertura | Qué lo sostiene |
+| --- | --- | --- |
+| `internal/domain` | **100,0%** | El núcleo, completo |
+| `internal/infrastructure/identity` | 98,7% | Mapper de dry-run y tabla de acentos |
+| `internal/application` | 96,4% | Prompt por defecto, reloj, `ErrorEtapa`, TC-07 |
+| `internal/infrastructure/logging` | 93,8% | Formatos, niveles, `job_id` |
+| `internal/infrastructure/parsers` | 93,3% | Registro y `ExtensionDeRuta` |
+| `internal/infrastructure/adapters` | 93,0% | `consultarProjectID`, `cacheIDs` sin stampede |
+| `internal/infrastructure/llm` | 92,7% | `Name()` de los cuatro, contrato del puerto |
+| `cmd/talkaboutthis` | 92,3% | Formateadores, códigos de etapa, ayuda |
+| `internal/infrastructure/jsonschema` | 89,4% | Orden determinista, palabras no soportadas |
+| `docs/specifications` | 75,0% | Solo `embed.go`; el schema va incrustado |
+| `pkg/sdk` | — | Guarda de frontera (sin código de producción) |
+| **Total** | **93,4%** | 310 tests en 11 paquetes |
 
 Ningún test sale a la red real ni necesita credenciales: el LLM se simula con un servidor `httptest` y GitHub con dobles de `ProjectBoardAdapter`.
+
+---
+
+## Documentación
+
+La documentación completa vive en [`docs/`](./docs/README.md) y se organiza en
+cuatro familias:
+
+| Familia | Responde | Índice |
+| --- | --- | --- |
+| **Especificaciones** | Qué debe hacer el sistema | [`docs/specs/`](./docs/specs/README.md) |
+| **Arquitectura** | Cómo está construido, módulo a módulo | [`docs/architecture/`](./docs/architecture/README.md) |
+| **ADR** | Por qué se decidió así, con sus alternativas | [`docs/adr/`](./docs/adr/README.md) |
+| **Funcionalidades críticas** | Qué compromisos no se pueden romper | [`docs/criticas/`](./docs/criticas/README.md) |
+
+Todos los diagramas son **Mermaid embebido** (` ```mermaid `), y se renderizan en
+GitHub, GitLab y cualquier editor con el plugin.
+
+Si quieres entender el proyecto, empieza por:
+
+1. [`docs/architecture/README.md`](./docs/architecture/README.md) — la vista general.
+2. [`docs/architecture/flujos/00-vision-general.md`](./docs/architecture/flujos/00-vision-general.md) — el recorrido completo.
+3. [`docs/specs/07-trazabilidad.md`](./docs/specs/07-trazabilidad.md) — qué cubre qué.
 
 ---
 

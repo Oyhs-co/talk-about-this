@@ -289,10 +289,47 @@ silencioso.
 - [ ] ¿El dry-run sigue sin tocar `IdentityMapper` ni el adaptador de tablero?
 - [ ] ¿Si tocaste la precedencia flag/entorno, hay test para los dos lados?
 - [ ] ¿Ningún secreto quedó en el diff?
+- [ ] ¿Si tocaste el paralelismo, el test lanza **goroutines de verdad**? Un bug de
+  concurrencia probado en serie no está probado.
+- [ ] ¿Si tocaste el retry loop, hay test que compruebe que el **prompt de
+  corrección lleva los errores**, no solo que hay reintentos?
+- [ ] ¿Si tocaste `cacheIDs`, hay test que lance N goroutines pidiendo la misma
+  clave y compruebe que se resuelve **una** vez?
+- [ ] ¿La documentación de `docs/` affected sigue diciendo lo que hace el código?
+- [ ] ¿Hay un ADR nuevo si tomaste una decisión no obvia?
 
 ---
 
-## 11. Reglas de contribución
+## 11. Documentación (obligatorio en `docs/`)
+
+La documentación del proyecto vive en [`docs/`](./docs/README.md) y está
+organizada en cuatro familias. **Antes de tocar código, lee la familia que
+corresponda al cambio:**
+
+| Vas a… | Lee |
+| --- | --- |
+| Cambiar comportamiento observable | [`docs/specs/`](./docs/specs/README.md) |
+| Cambiar estructura o un flujo | [`docs/architecture/`](./docs/architecture/README.md) |
+| Tomar una decisión no obvia | [`docs/adr/`](./docs/adr/README.md) — **un ADR nuevo, no editar uno aceptado** |
+| Tocar un compromiso frágil | [`docs/criticas/`](./docs/criticas/README.md) |
+
+Reglas:
+
+1. **Todo diagrama es Mermaid embebido** con ` ```mermaid `. Nunca cuadros de
+   texto ASCII.
+2. **Los identificadores de nodo no llevan tildes**; las etiquetas sí, entre
+   comillas: `A["Capa de aplicación"]`.
+3. **Documentación en español con tildes; código en español sin tildes.**
+4. **Un ADR aceptado no se edita.** Si la decisión cambia, se escribe otro que la
+   reemplaza y se marca el primero como *Reemplazada por*.
+5. **Todo compromiso crítico tiene un test que lo vigila.** Un compromiso que
+   solo está escrito en un `.md` se erosiona.
+6. **Los nombres de test que se citan en la documentación existen.** Un documento
+   que cita un test inexistente es peor que uno que no lo cita.
+
+---
+
+## 12. Reglas de contribución
 
 - Commits pequeños y con un propósito. Mensaje en imperativo, explicando el *porqué*.
 - Un commit = un hito o una parte coherente de un hito.
