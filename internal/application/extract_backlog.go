@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"talkaboutthis/internal/domain"
@@ -92,6 +93,8 @@ func NuevoExtractBacklog(opciones ExtractOpciones) (*ExtractBacklog, error) {
 	// log en lugar de callar: una regla que no se comprueba es peor que no
 	// tenerla. No es un error porque el schema puede seguir siendo valido.
 	for _, palabra := range desconocidas {
+		// En la construccion no hay contexto: se usa el logger global, que es
+		// lo unico disponible antes de que exista una ejecucion.
 		slog.Warn("el JSON Schema usa una palabra clave que el validador no aplica",
 			slog.String("palabra_clave", palabra),
 			slog.String("titulo", schema.Title),
@@ -140,6 +143,8 @@ func (e *ExtractBacklog) Ejecutar(ctx context.Context, transcript string) (*doma
 
 	var erroresAcumulados []string
 
+	log := loggerDe(ctx)
+
 	for intento := 1; intento <= MaxIntentosExtraccion; intento++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -155,7 +160,7 @@ func (e *ExtractBacklog) Ejecutar(ctx context.Context, transcript string) (*doma
 			prompt = e.prompt.ConstruirCorreccion(transcript, e.schemaJSON, erroresAcumulados)
 		}
 
-		slog.Info("intentando extraer el backlog",
+		log.Info("intentando extraer el backlog",
 			slog.Int("intento", intento),
 			slog.Int("max_intentos", MaxIntentosExtraccion),
 			slog.String("proveedor", e.proveedor.Name()),
@@ -177,7 +182,8 @@ func (e *ExtractBacklog) Ejecutar(ctx context.Context, transcript string) (*doma
 
 		extraccion, errores := e.validarRespuesta(crudo)
 		if len(errores) == 0 {
-			slog.Info("extraccion valida",
+			log := loggerDe(ctx)
+			log.Info("extraccion valida",
 				slog.Int("intento", intento),
 				slog.Int("items", len(extraccion.ActionItems)),
 			)
@@ -187,7 +193,7 @@ func (e *ExtractBacklog) Ejecutar(ctx context.Context, transcript string) (*doma
 		// La respuesta llego pero no cumple el contrato: esto SI se puede
 		// corregir, asi que se acumula el error y se reintenta.
 		erroresAcumulados = append(erroresAcumulados, errores...)
-		slog.Warn("la respuesta no cumple el esquema, se reintentara con correccion",
+		log.Warn("la respuesta no cumple el esquema, se reintentara con correccion",
 			slog.Int("intento", intento),
 			slog.Int("errores", len(errores)),
 			slog.String("detalle", errores[0]),
@@ -227,6 +233,14 @@ func (e *ExtractBacklog) validarRespuesta(crudo []byte) (*domain.MeetingBacklogE
 		return nil, []string{fmt.Sprintf("la respuesta no es JSON valido: %v", err)}
 	}
 
+	// Antes de validar se normalizan los enums. Un LLM escribe "high" con una
+	// frecuencia altisima aunque el schema diga "HIGH": el prompt travels entero
+	// hasta el modelo, y alli las mayusculas no sobreviven. Fallar por eso
+	// consumiria los tres reintentos del Retry Loop y devolveria un error para
+	// un dato que era correcto en sustancia. Normalizar aqui, en la frontera con
+	// el modelo, es el punto donde el dato deja de ser entrada externa.
+	normalizarEnums(documento)
+
 	// Capa 2: forma segun el schema.
 	resultado := jsonschema.Validar(documento, e.schema)
 	if !resultado.Valido() {
@@ -238,8 +252,20 @@ func (e *ExtractBacklog) validarRespuesta(crudo []byte) (*domain.MeetingBacklogE
 	}
 
 	// Capa 3: deserializacion a structs del dominio.
+	//
+	// Se deserializa del documento NORMALIZADO, no de los bytes originales. Es
+	// la unica forma de que las dos capas及以上 coincidan: si se leyera `crudo`,
+	// el validador habria visto "HIGH" (ya normalizado) mientras el modelo del
+	// dominio leeria "high" del JSON original y lo rechazaria. Validar y
+	// deserializar cosas distintas es como un error pasa el filtro y luego estalla.
+	normalizado, err := json.Marshal(documento)
+	if err != nil {
+		return nil, []string{fmt.Sprintf(
+			"la respuesta normalizada no se pudo serializar: %v", err)}
+	}
+
 	var extraccion domain.MeetingBacklogExtraction
-	if err := json.Unmarshal(crudo, &extraccion); err != nil {
+	if err := json.Unmarshal(normalizado, &extraccion); err != nil {
 		return nil, []string{fmt.Sprintf(
 			"el JSON cumple el esquema pero no se pudo convertir al modelo interno: %v", err)}
 	}
@@ -251,6 +277,48 @@ func (e *ExtractBacklog) validarRespuesta(crudo []byte) (*domain.MeetingBacklogE
 	}
 
 	return &extraccion, nil
+}
+
+// normalizarEnums pasa a mayusculas los valores de los campos enumerados.
+//
+// Se trabaja sobre el documento ya deserializado a `any` y se modifica en el
+// sitio: el mismo valor es el que despues se valida y se convierte al modelo
+// del dominio, de modo que no puede haber una discrepancia entre lo validado y
+// lo guardado.
+//
+// Un valor que ya es valido se deja intacto. Uno que no corresponde a ningun
+// miembro del enum NO se inventa: se deja como estaba para que el validador lo
+// reporte, porque un "urgente" silenciosamente convertido en "MEDIUM" seria
+// publicar una tarea con una prioridad que nadie eligio.
+func normalizarEnums(documento any) {
+	raiz, ok := documento.(map[string]any)
+	if !ok {
+		return
+	}
+
+	items, ok := raiz["action_items"].([]any)
+	if !ok {
+		return
+	}
+
+	for _, bruto := range items {
+		item, ok := bruto.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		valor, ok := item["priority"].(string)
+		if !ok {
+			continue
+		}
+
+		for _, candidato := range []domain.Priority{domain.PriorityHigh, domain.PriorityMedium, domain.PriorityLow} {
+			if strings.EqualFold(valor, string(candidato)) {
+				item["priority"] = string(candidato)
+				break
+			}
+		}
+	}
 }
 
 // dormirRespetandoContexto espera sin ignorar la cancelacion.
