@@ -5,8 +5,8 @@
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
 **Estado actual:** esqueleto preparado (estructura, `go.mod`, schema, configuración, tooling).
-**Fases 1, 2 y 3: COMPLETADAS** (dominio; parsers e ingesta; LLM y Retry Loop).
-**Fases restantes:** 4 (Identidad + GitHub Projects), 5 (CLI).
+**Fases 1 a 4: COMPLETADAS.** Solo queda la **Fase 5 (CLI y orquestación)** para tener el producto completo.
+**Estado:** 292 tests, cero dependencias externas, dominio al 100% de cobertura.
 
 ---
 
@@ -214,43 +214,68 @@ gofmt -l .       # sin salida
 
 ---
 
-## Fase 4 — Mapeo de identidades y adaptador GitHub Projects
+## Fase 4 — Mapeo de identidades y adaptador GitHub Projects ✅ COMPLETADA
 
 **Objetivo:** resolver menciones a handles reales y publicar el backlog. (RF-04, RF-05, TC-04, TC-06)
 
-### Tareas
+### Resultado
 
-1. `internal/infrastructure/identity/json_mapper.go` — carga `mappings.json`, índice en memoria por nombre normalizado.
-   - Normalización: `strings.ToLower` + `strings.TrimSpace` + colapso de espacios.
-   - Soportar también abreviaturas iniciales (`"Omar H."`).
-2. Política de no-resolución configurable: `fail` | `assign_unassigned` | `skip` (leer `configs/mappings.example.json`).
-3. `internal/infrastructure/adapters/github_graphql.go` — mutaciones GraphQL de Projects v2:
-   - `addIssueToProject` (crear `Issue` + `addIssueToProject`).
-   - Mover a columna por Status: `moveProjectCard` / `updateProjectCardFieldValue`.
-4. `internal/infrastructure/adapters/github_cli.go` — backend alternativo vía binario `gh`.
-5. `internal/application/publish_backlog.go` — orquestación: `IdentityMapper` sobre cada ítem → decisión dry-run vs publish.
-6. `github_cli.go` y `github_graphql.go` deben registrar un `var _ domain.ProjectBoardAdapter = (*X)(nil)` de compilación.
+| Entregable | Archivo | Estado |
+| --- | --- | --- |
+| JSONIdentityMapper | `internal/infrastructure/identity/json_mapper.go` | Hecho |
+| Cliente GraphQL | `internal/infrastructure/adapters/graphql.go` | Hecho |
+| Adaptador Projects v2 | `internal/infrastructure/adapters/github_graphql.go` | Hecho |
+| Adaptador vía CLI (`gh`) | `internal/infrastructure/adapters/github_cli.go` | Hecho |
+| Caso de uso de despacho | `internal/application/publish_backlog.go` | Hecho |
 
-### Consideraciones
+**Verificación:** `gofmt` limpio, `go vet` limpio, **292 tests en verde**, adapters 89.1%, identity 95.7%, **cero dependencias externas**.
 
-- GraphQL v2 requiere primero resolver los `node_id` de `owner`, `repo` y `project`. Cachearlos dentro de la ejecución.
-- El token viaja en el header `Authorization` y **nunca** se loguea.
-- Respetar los límites de tasa de la API de GitHub: reintentos con backoff ante 5xx y errores de *rate limit*.
+### Decisiones tomadas en esta fase
+
+- **El cliente GraphQL NO reutiliza el de los proveedores de LLM.** No es duplicación: GraphQL devuelve los errores **dentro del cuerpo con HTTP 200**, en un arreglo `errors`. Un cliente que solo mira el código de estado daría por buena una tarjeta que nunca se creó, que es el peor fallo posible.
+- **Crear el issue y asociarlo al tablero son dos operaciones.** En Projects v2 el tablero no contiene issues: contiene *items*. Si la asociación falla, el issue existe pero no está en el tablero, y el `PublishResult` lo dice explícitamente.
+- **Un fallo parcial no es un error global.** Cinco de seis tarjetas creadas se reportan como resumen con `exitos=5, fallos=1`, no como operación fallida: si no, el usuario creería que no se publicó nada.
+- **El handle se devuelve SIN `@`.** Es lo que exigen los campos `assignee` de GitHub; anteponerlo produce un error de la API. El `@` de la especificación es notación documental.
+- **Normalización sin acentos.** `strings` de Go no trae normalización Unicode, así que hay una tabla explícita del rango latino. Sin esto, "Hernández" y "Hernandez" serían dos personas distintas.
+- **El nombre de pila solo se resuelve si es único.** Con dos "Omar" en la tabla, `Omar` queda sin resolver: adivinar publicaría tareas bajo la persona equivocada, un fallo silencioso que nadie descubre hasta semanas después.
+- **Concurrencia limitada a 4 items simultáneos** contra la API de GitHub. Publicar veinte mutaciones a la vez es la vía rápida a un 403 por rate limit.
+
+### Bugs reales encontrados y corregidos
+
+1. **La caché de IDs sufría *cache stampede*.** Al publicar en paralelo, todos los items consultaban a la vez el `node_id` del repositorio: 3 items → 3 consultas, que es justo lo que la caché debía evitar. Corregido con un **lock por clave** y doble comprobación, de modo que solo los items que necesitan el mismo id esperan. Lo detectó `TestCacheDeIdentificadores`.
+2. **El índice de alias nunca registraba nombres de pila únicos.** `pilaEsUnica` consultaba claves de una sola palabra que todavía no existían en el mapa, así que devolvía siempre `false` y "Luis" o "Ana" jamás se resolvían. Rehecho con un conjunto de handles por nombre de pila en dos pasadas.
+3. **Las abreviaturas solo usaban el último apellido.** "Ana María Ruiz" generaba `ana r` pero no `ana m`, así que la mención más habitual ("Ana M.") fallaba. Ahora se genera un alias por cada token posterior.
+4. **Un token ausente se reportaba como fallo del primer item.** Ahora se valida al inicio de `PublishBacklog`, porque es un error de configuración, no un fallo por elemento.
+
+### Garantía TC-05 verificada por inyección
+
+La prueba de que el dry-run no hace red se verificó **rompiendo el código a propósito**: moví la comprobación del modo después de resolver identidades y confirmé que el test falla con `SE RESOLVIERON IDENTIDADES EN MODO DRY-RUN`. Restaurado, pasa. Un test que nunca falla no protege nada.
 
 ### Tests
 
-| ID | Qué se verifica |
-| --- | --- |
-| TC-04 | `"Omar Hernández"`, `"omar hernandez"`, `"Omar H."` → `@omarhernan`; match case-insensitive |
-| TC-06 | Mocks de GraphQL: se emite la mutación correcta y se devuelve el `id` generado |
-| — | Nombre no mapeado → según la política configurada |
-| TC-05 | Con `--dry-run`, el HTTP client de GitHub **no se instancia**; el test falla si hay una sola llamada |
+| ID | Qué se verifica | Estado |
+| --- | --- | --- |
+| TC-04 | "Omar Hernández" → `omarhernan`, insensible a mayúsculas | ✅ |
+| TC-04 | Tolera acentos ausentes y abreviaturas ("Omar H.", "Ana M.") | ✅ |
+| TC-04 | Nombre de pila ambiguo **no** se resuelve | ✅ |
+| TC-05 | Dry-run: cero llamadas al tablero **y** al mapper | ✅ verificado por inyección de regresión |
+| TC-06 | `createIssue` + `addIssueToProject` con variables correctas | ✅ |
+| TC-06 | Los IDs de GraphQL se devuelven y se cachean | ✅ |
+| TC-06 | Errores in-band de GraphQL → error de Go | ✅ |
+| TC-07 | GraphQL y CLI cumplen el mismo `ProjectBoardAdapter` | ✅ |
+| RNF-04 | El token viaja solo en la cabecera `Authorization` | ✅ |
+| RNF-05 | Reintentos solo ante fallos transitorios (rate limit, red) | ✅ |
+| — | Concurrencia limitada y fallos parciales tolerados | ✅ |
+| — | La CLI se prueba sin `gh` instalado (proceso-ayudante) | ✅ |
 
-### Criterio de salida
+### Criterio de salida — cumplido
 
 ```bash
-make test
-# cobertura de identity y adapters >= 80 %
+go build ./...   # OK
+go vet ./...     # limpio
+go test ./...    # ok en los 9 paquetes
+gofmt -l .       # sin salida
+# ningún test sale a la red real
 ```
 
 ---
