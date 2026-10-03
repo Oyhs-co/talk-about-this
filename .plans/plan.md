@@ -5,7 +5,8 @@
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
 **Estado actual:** esqueleto preparado (estructura, `go.mod`, schema, configuración, tooling).
-**Fases restantes:** 1, 2, 3, 4 y 5.
+**Fase 1: COMPLETADA** (dominio, contratos, guardas arquitectónicas).
+**Fases restantes:** 2 (Parsers), 3 (LLM + Retry), 4 (Identidad + GitHub), 5 (CLI).
 
 ---
 
@@ -29,33 +30,59 @@ Las fases 2 y 3 pueden desarrollarse **en paralelo**: solo dependen de los contr
 
 ---
 
-## Fase 1 — Estructura base y dominio
+## Fase 1 — Estructura base y dominio ✅ COMPLETADA
 
 **Objetivo:** dejar el núcleo compilable y los contratos cerrados. Ningún pixel de infraestructura todavía.
 
+### Resultado
+
+| Entregable | Archivo | Estado |
+| --- | --- | --- |
+| Errores sentinela | `internal/domain/errors.go` | Hecho (10 sentinelas) |
+| Entidades e invariantes | `internal/domain/models.go` | Hecho (100% cubierto) |
+| 4 puertos | `internal/domain/ports.go` | Hecho |
+| Entidades de Ingestión | `internal/domain/transcript.go` | Hecho |
+| Guardas arquitectónicas | `internal/domain/architecture_test.go` | Hecho (3 guardas) |
+| Sincronía SDD | `internal/domain/schema_sync_test.go` | Hecho (4 tests) |
+| Schema embebido | `docs/specifications/embed.go` | Hecho |
+| Composition root | `cmd/talkaboutthis/main.go` | Hecho (CLI real en Fase 5) |
+
+**Verificación:** `gofmt` limpio, `go vet` limpio, `go build` OK, **dominio al 100% de cobertura**, total del repo 93.2%.
+
+**Decisiones tomadas en esta fase:**
+- `go:embed` no alcanza `docs/` desde `cmd/`, asi que el embed vive en `docs/specifications/embed.go` y expone `BacklogSchema()`/`Validar()`. Evita mantener una copia del schema que pueda divergir.
+- Las guardas arquitectónicas usan `go/parser` en lugar de `go/build`: este ultimo falla con rutas POSIX en Windows y no hace falta resolver paquetes para leer imports.
+- Se decidio que una prioridad desconocida produce error, nunca `MEDIUM` por defecto. Cubierto por `TestPrioridadInvalidaNoSeSustituyeEnSilencio`.
+- Se elimino un `TranscriptPort` que se habia añadido sin uso: codigo muerto en el nucleo es peor que su ausencia.
+
 ### Tareas
 
-1. `internal/domain/models.go` — `Priority`, `ActionItem`, `MeetingBacklogExtraction`, `PublishResult`, `ExtractionJob`.
-2. `internal/domain/ports.go` — las 4 interfaces de `INIT.md` §5.1.
-3. `internal/domain/errors.go` — errores sentinela con `errors.New` (`ErrInvalidPriority`, `ErrSchemaViolation`, `ErrIdentityNotFound`, `ErrPublishFailed`, …).
-4. `docs/specifications/backlog_schema.json` — ya existe. Validar contra los struct tags.
-5. Test de guarda de la regla de imports (§1 de `AGENTS.md`).
-6. `cmd/talkaboutthis/main.go` mínimo que solo wirea un `*domain.ExtractionJob` vacío y compila.
+1. `internal/domain/models.go` — `Priority`, `ActionItem`, `MeetingBacklogExtraction`, `PublishResult`, `ExtractionJob`. ✅
+2. `internal/domain/ports.go` — las 4 interfaces de `INIT.md` §5.1. ✅
+3. `internal/domain/errors.go` — errores sentinela con `errors.New`. ✅
+4. `docs/specifications/backlog_schema.json` — existe y validado contra los struct tags. ✅
+5. Test de guarda de la regla de imports (§1 de `AGENTS.md`). ✅
+6. `cmd/talkaboutthis/main.go` mínimo que compila. ✅
 
 ### Tests
 
-| ID | Qué se verifica |
-| --- | --- |
-| TC-07 (parcial) | `domain` no importa `infrastructure` (usar `go list -deps`) |
-| — | Los `json:"..."` tags coinciden campo a campo con el schema JSON |
-| — | `Priority` rechaza valores fuera del enum |
+| ID | Qué se verifica | Resultado |
+| --- | --- | --- |
+| TC-07 (parcial) | `domain` no importa `infrastructure` | ✅ 3 guardas, verificadas por inyección de un import prohibido |
+| RNF-02 | Tags `json` coinciden con el schema campo a campo | ✅ |
+| RNF-02 | Enum de `priority` del schema == constantes del dominio | ✅ verificado por desincronización |
+| RNF-02 | `maxLength` del schema == `MaxTituloLen` == tag `validate` | ✅ los tres sitios verificados |
+| — | `Priority` rechaza valores fuera del enum | ✅ |
+| — | `domain` solo usa stdlib y no hace I/O de red | ✅ |
 
-### Criterio de salida
+### Criterio de salida — cumplido
 
 ```bash
-go build ./... && go test ./... && go vet ./...
-# y
-go list -deps ./internal/domain | grep -c infrastructure   # debe ser 0
+go build ./...   # OK
+go vet ./...     # limpio
+go test ./...    # ok en los 3 paquetes
+gofmt -l .       # sin salida
+go tool cover -func=coverage.out | awk '$3 != "100.0%"'  # domain 100%
 ```
 
 ---
