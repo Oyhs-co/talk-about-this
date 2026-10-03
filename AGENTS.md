@@ -197,9 +197,16 @@ Cualquier agente que implemente funcionalidad nueva debe respetar estas etapas y
 
 Cuando se paralelice (múltiples archivos, múltiples ítems):
 
-- Usar `golang.org/x/sync/errgroup` para propagar errores y cancelar en contexto.
-- **Nunca** crear goroutine sin `defer wg.Done()` ni sin límite de concurrencia.
-- El primer error debe cancelar el contexto de los demás.
+- **No** usar `golang.org/x/sync/errgroup`: el proyecto no tiene dependencias
+  externas (INIT.md §1). La cancelación se hace con `context.WithCancel` y la
+  agregación de errores con `sync.WaitGroup`, como en
+  `adapters.GitHubGraphQL.PublishBacklog`.
+- Limitar la concurrencia con un **semáforo** (`chan struct{}` con capacidad),
+  nunca con un `go` por item: veinte mutaciones simultáneas contra GitHub son
+  la vía rápida a un 403 por rate limit. El límite actual es 4.
+- **Nunca** crear goroutine sin `defer wg.Done()`.
+- El primer error debe cancelar el contexto de los demás: quien lanza el
+  `cancel` es quien recibe el primer fallo.
 
 ---
 
@@ -253,7 +260,15 @@ Cada cambio debe poder asociarse a al menos un caso de esta matriz. Al añadir f
 | `OLLAMA_BASE_URL`, `OLLAMA_MODEL` | Motor local |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY` | APIs SaaS |
 | `GITHUB_TOKEN`, `GITHUB_OWNER`, `GITHUB_REPO`, `GITHUB_PROJECT_ID` | GitHub Projects v2 |
+| `ASSIGNEE_POLICY` | Política ante responsables no mapeados: `fail` (por defecto), `assign_unassigned`, `skip` |
 | `LOG_LEVEL`, `LOG_FORMAT`, `REQUEST_TIMEOUT` | Observabilidad |
+
+**Precedencia: el flag gana siempre al entorno.** El entorno solo rellena lo que
+el usuario no escribió en la línea de comandos. Para decidirlo no se compara el
+valor con el de por defecto (con `--log-format text` no hay forma de saber si el
+usuario lo escribió), sino con `flag.FlagSet.Visit`, que solo recorre las
+banderas presentes. No inventes atajos: comparar con el default es un bug
+silencioso.
 
 - Plantilla en [`.env.example`](./.env.example). El `.env` real está en `.gitignore`.
 - El PAT de GitHub requiere scope `project`.
@@ -271,6 +286,8 @@ Cada cambio debe poder asociarse a al menos un caso de esta matriz. Al añadir f
 - [ ] ¿`--dry-run` sigue siendo 100% offline?
 - [ ] ¿Hay tests para el caso nuevo de la matriz TC?
 - [ ] ¿`make check` pasa en verde?
+- [ ] ¿El dry-run sigue sin tocar `IdentityMapper` ni el adaptador de tablero?
+- [ ] ¿Si tocaste la precedencia flag/entorno, hay test para los dos lados?
 - [ ] ¿Ningún secreto quedó en el diff?
 
 ---

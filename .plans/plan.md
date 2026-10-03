@@ -4,9 +4,8 @@
 > Cada fase es independiente y verificable. **No se avanza de fase hasta cumplir el criterio de salida.**
 > Contrato de desarrollo aplicable: [`AGENTS.md`](../AGENTS.md).
 
-**Estado actual:** esqueleto preparado (estructura, `go.mod`, schema, configuración, tooling).
-**Fases 1 a 4: COMPLETADAS.** Solo queda la **Fase 5 (CLI y orquestación)** para tener el producto completo.
-**Estado:** 292 tests, cero dependencias externas, dominio al 100% de cobertura.
+**Estado actual:** producto completo. **Fases 1 a 5: COMPLETADAS.**
+**Estado:** 390 tests en verde, cero dependencias externas, cobertura global 90,7%, dominio al 100%.
 
 ---
 
@@ -280,42 +279,133 @@ gofmt -l .       # sin salida
 
 ---
 
-## Fase 5 — CLI y orquestación
+## Fase 5 — CLI y orquestación ✅ COMPLETADA
 
 **Objetivo:** unir todo en un binario utilizable. (RF-06, TC-05)
 
-### Tareas
+### Resultado
 
-1. `cmd/talkaboutthis/main.go` — composition root: leer flags/env, construir parsers, provider, mapper y adapter; inyectarlos.
-2. Subcomando `ingest` con flags: `--file`, `--provider`, `--dry-run`, `--publish`, `--config`, `--mappings`, `--schema`, `--project`, `--repo`, `--log-format`, `--log-level`, `--timeout`.
-3. Salida de dry-run: **ambas** formas, JSON (`--output json`) y tabla legible (`--output table`).
-4. `internal/infrastructure/logging/` — setup de `log/slog` (JSON o texto) con `Job ID` como atributo.
-5. Códigos de salida distintos para cada clase de fallo (validación, config, proveedor, publish) para que sea usable en CI.
-6. `README.md` — instalación, flags, ejemplo end-to-end, tabla de variables de entorno.
-7. Verificación de que el schema se embebe con `go:embed` (binario autocontenido).
+| Entregable | Archivo | Estado |
+| --- | --- | --- |
+| Composition root puro | `cmd/talkaboutthis/main.go` | Hecho |
+| Configuración flags + entorno | `cmd/talkaboutthis/config.go` | Hecho |
+| Render JSON y tabla legible | `cmd/talkaboutthis/output.go` | Hecho |
+| Orquestación de etapas | `internal/application/pipeline.go` | Hecho |
+| Logger con Job ID | `internal/infrastructure/logging/logging.go` | Hecho |
+| Logger en contexto (sin cruzar capas) | `internal/application/contexto.go` | Hecho |
+| Tests de CLI y end-to-end | `cmd/talkaboutthis/{main,fixtures,e2e}_test.go` | Hecho |
 
-### Criterio de salida
+**Verificación:** `gofmt` limpio, `go vet` limpio, **390 tests en verde** en 10 paquetes, cmd 90.7%, **cero dependencias externas**, binario de 7,3 MB.
+
+### Corrección respecto al plan original
+
+Dos banderas del plan no se implementaron, a propósito:
+
+| Bandera del plan | Por qué no | Qué hace en su lugar |
+| --- | --- | --- |
+| `--config` | Un archivo de config duplicaría flags + entorno con dos fuentes de verdad | Solo flags y variables de entorno (el flag manda) |
+| `--schema` | El schema embebido es el contrato; permitir otro abre la puerta a un modelo desincronizado | `docs/specifications.BacklogSchema()` con validación cruzada en tests |
+
+Y dos banderas que el plan no preveía sí se añadieron: `--adapter` (`graphql` o `cli`) y `--assignee-policy` (`fail`, `assign_unassigned`, `skip`), necesarias para que la Fase 4 sea alcanzable desde la línea de comandos.
+
+### Decisiones tomadas en esta fase
+
+- **El composition root no orquesta nada.** La secuencia ingesta → extracción → despacho vive en `application.Pipeline`. La razón es que un `main.go` con lógica necesita tests que capturen `os.Exit` y las señales del proceso; al mover la secuencia a `application`, `main.go` se reduce a cablear dependencias y el test e2e invoca `ejecutar(ctx, args, stdout, stderr)` como una función normal.
+- **Dry-run es el modo por defecto.** Publicar en el tablero de un equipo es una acción con efecto externo: que ocurra por omisión sería una sorpresa inaceptable. Sin `--dry-run` ni `--publish` se asume `--dry-run`; darlos juntos es error de uso, no un "gana el último".
+- **Las banderas contradictorias se guardan fuera de `Configuracion`.** `dryRunFlag` y `publishFlag` son variables de estado, no campos: si vivieran en la configuración, el valor final ya habría perdido la información de que el usuario pidió los dos, y el error sería indetectable.
+- **La validación depende del modo.** En dry-run no se exige token, `owner` ni `repo`: pedir credenciales que no se van a usar es una barrera falsa.
+- **Un fallo parcial de publicación no es un error global.** Si 5 de 6 tarjetas se crearon, el proceso lo informa por el resumen y sale con 6, pero el JSON ya documenta qué se publicó y qué no.
+- **Los códigos de salida siguen `sysexits.h`.** 0 ok · 1 uso · 2 config · 3 ingesta · 4 extracción · 5 identidad · 6 publica · 130 interrumpido. Lo que hace útil la CLI en CI es poder *reintentar por red* (4) pero *no por un archivo mal escrito* (3).
+- **`SIGINT` y `SIGTERM` se capturan** con `signal.NotifyContext`, de modo que Ctrl-C sale con 130 y no con un error genérico.
+
+### Bugs reales encontrados y corregidos
+
+1. **`slog.Logger` no tiene `WithContext`** (era `slog.Default().With(...)`). Creado `internal/application/contexto.go` con `conLoggerEnContexto` / `loggerDe`, para poder propagar el Job ID sin que `application` importe `infrastructure/logging` — lo que habría roto la regla de imports del `AGENTS.md` §1.
+2. **`LLM_PROVIDER` se ignoraba en silencio.** La condición era `cfg.Proveedor == "ollama"`, que nunca se cumplía porque el flag ya traía el valor por defecto. Corregido a `cfg.Proveedor == "" || cfg.Proveedor == ProveedorPorDefecto`, que además cubre una `Configuracion` construida a mano que nunca pasó por `registrarFlags`.
+3. **Alarma falsa en la tabla del dry-run.** La columna de responsable marcaba siempre `(SIN RESOLVER)`, porque en dry-run el mapper no se consulta por diseño (TC-05). Ahora el marcador solo aparece en modo publish, que es el único caso en que significa algo.
+4. **Un `--timeout 1ms` hacía fallar todo con un error desconcertante.** `timeoutEfectivo` impone un suelo de 5 s: por debajo, el LLM no tiene tiempo de responder y el mensaje no explica la causa real.
+5. **Job IDs colisionables si se usara `time.Now()`.** Se generan con 6 bytes de `crypto/rand` en hexadecimal (`job-3f9a…`), que además no filtran nada del reloj del sistema.
+
+### Garantía TC-05 verificada de nuevo
+
+`TestTC05LaCLICompletaNoTocaGitHub` levanta un servidor `httptest` con la forma de respuesta de Ollama y ejecuta la CLI real contra él. El test pasa cuando: el backlog se extrae, la salida se imprime, el proceso sale con 0, **y ninguna petición llega a GitHub**. La verificación fue bidireccional: primero se confirmó que el test falla si se reintroduce una llamada al tablero, y después se restauró el código.
+
+### Tests
+
+| ID | Qué se verifica | Estado |
+| --- | --- | --- |
+| RF-06 | La CLI extrae y muestra el backlog en modo dry-run | ✅ |
+| TC-05 | CLI completa: **cero** tráfico a GitHub (servidor httptest) | ✅ |
+| — | `--dry-run` + `--publish` juntos → error de uso (código 1) | ✅ |
+| — | Sin banderas de modo se asume dry-run | ✅ |
+| — | Publicar sin `--project` → error de uso, no de config | ✅ |
+| — | Publicar sin token → mensaje accionable, nunca imprime el token | ✅ |
+| — | `--output table` y `--output json` renderizan el mismo backlog | ✅ |
+| — | En publish, un responsable sin resolver se marca; en dry-run, no | ✅ |
+| — | `SIGINT` → código 130 y mensaje de cancelación | ✅ |
+| — | `--help`, `--version` y subcomando inexistente | ✅ |
+| — | Job ID presente en los logs en formato JSON y texto | ✅ |
+| RNF-04 | El token no aparece en la salida, ni en logs ni en errores | ✅ |
+| — | Schema embebido legible sin archivos sueltos (binario autocontenido) | ✅ |
+
+### Criterio de salida — cumplido
 
 ```bash
-make check
-make build
-./bin/talkaboutthis ingest --file testdata/ejemplo.md --dry-run --provider ollama
-# debe imprimir el backlog y salir con 0 sin tocar la red
+gofmt -l .         # sin salida
+go vet ./...       # limpio
+go build ./...     # OK
+go test ./...      # ok en los 10 paquetes, 390 tests
+./bin/talkaboutthis ingest --file testdata/reunion-equipo.md --dry-run --provider ollama
+# imprime el backlog, sale con 0 y no sale a la red
+# ningún test sale a la red real
 ```
+
+### Deuda cerrada al terminar la fase
+
+La cobertura de `internal/application` cayó de 90,7% a **60,6%** al entrar `pipeline.go` y `contexto.go`, que no tenían tests directos: solo se ejercitaban a través de la CLI. Se cerró añadiendo `internal/application/pipeline_test.go` (dobles de extractor y tablero, fallo por etapa, propagación del Job ID a los logs) y tests de la precedencia flag/entorno en la CLI: **93,5%**, con la suite entera en **90,7%**.
+
+### Bugs reales encontrados al cerrar el proyecto
+
+Ocho, y ninguno lo había detectado la suite: aparecieron al escribir el README contra el código real y al ejecutar el binario compilado contra un servidor con la forma de Ollama.
+
+1. **`LOG_LEVEL` y `LOG_FORMAT` estaban documentados en `.env.example` pero nunca se leían.** El usuario los ajustaba y no pasaba nada. Ahora ambas se aplican, y los flags `--log-level` / `--log-format` tienen en ellas el relevo.
+2. **La precedencia flag/entorno estaba invertida.** `primeroNoVacio(os.Getenv(...), cfg.X)` daba prioridad al entorno: un `GITHUB_OWNER` exportado en la sesión pisaba un `--owner` escrito a propósito. Invertido en todos los campos.
+3. **Comparar el valor con el default no detecta un flag explícito.** `--log-format` solo admite `text` y `json`, y `text` es el de por defecto, así que el flag nunca podía ganar. Añadido `registrarFlagsEnviadas`, que usa `flag.FlagSet.Visit` (que solo recorre las banderas escritas) y registra cuáles aparecieron antes de `completar()`.
+4. **`conLoggerEnContexto` entraba en panic con un `ctx` nil.** `loggerDe` ya lo toleraba, así que la asimetría era un crash esperando. Ahora se sustituye por `context.Background()`.
+5. **Un carácter CJK corrupto en un comentario** (`seconsideraronaron`) en `publish_backlog.go`, resto de una escritura anterior. Barrido de todo el árbol.
+6. **La tabla de identidades era obligatoria en dry-run.** El archivo `mappings.json` tiene que existir para arrancar, aunque en dry-run no se consulta ni un solo nombre (TC-05). El modo por defecto quedaba bloqueado para cualquiera que no hubiera copiado el ejemplo, y el error salía con el código 5 (identidad) cuando lo que fallaba era una lectura. Ahora la tabla es obligatoria **solo al publicar**: en seco se usa `identity.MapperVacio()`.
+7. **`job_id` salía duplicado en cada línea de log** (`job_id=job-abc job_id=job-abc`). La CLI inyecta su logger con el job_id puesto y el pipeline lo volvía a añadir. El pipeline ahora respeta el logger que encuentra en el contexto en lugar de enriquecerlo. Verificado rompiendo el código a propósito: el test falla con «el job_id aparece 2 veces en una linea».
+8. **Un LLM que responde `"high"` en vez de `"HIGH"` agotaba los tres reintentos y fallaba.** El schema de `INIT.md` exige mayúsculas, pero el prompt viaja entero hasta el modelo y allí las mayúsculas no sobreviven. El fallo era por un detalle de caja que nunca cambia el significado del dato. Se normaliza el enum en la frontera con el modelo, antes de validar, y **sin inventar**: un "urgente" se rechaza igual que antes. Al hacerlo apareció un segundo bug oculto: la Capa 3 deserializaba de los bytes originales, así que validaba un valor y guardaba otro.
+
+Los tres últimos se encontraron ejecutando el **binario real** contra un servidor con la forma de Ollama, no leyendo el código: la suite los daba por buenos porque sus dobles usaban siempre mayúsculas.
 
 ---
 
-## Verificación final (tras la Fase 5)
+## Verificación final — ejecutada
 
 ```bash
-make check          # fmt + vet + test
-make cover          # cobertura total
-make build          # binario estático
-make lint           # golangci-lint si disponible
-make docker-build   # imagen multi-stage
+gofmt -l .           # sin salida
+go vet ./...         # limpio
+go test ./...        # ok en los 10 paquetes, 390 tests
+go test ./... -coverprofile=coverage.out && go tool cover -func=coverage.out
+go build -o bin/talkaboutthis ./cmd/talkaboutthis
 ```
 
 Matriz TC-01 … TC-07 en verde, sin ningún test que dependa de red o credenciales reales.
+
+| Paquete | Cobertura |
+| --- | --- |
+| `internal/domain` | 100,0% |
+| `internal/application` | 93,5% |
+| `cmd/talkaboutthis` | 90,7% |
+| `infrastructure/identity` | 90,0% |
+| `infrastructure/llm` | 91,7% |
+| `infrastructure/parsers` | 93,1% |
+| `infrastructure/adapters` | 89,1% |
+| `infrastructure/logging` | 93,8% |
+| `infrastructure/jsonschema` | 78,0% |
+| `docs/specifications` | 75,0% |
+| **Total** | **90,7%** |
 
 ---
 
