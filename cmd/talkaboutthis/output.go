@@ -138,6 +138,7 @@ func construirSalidaJSON(resultado *application.PipelineResultado) salidaJSON {
 	}
 
 	despacho := &salidaDespacho{
+		Plataforma: resultado.Despacho.Plataforma,
 		Publicados: []salidaTarjeta{},
 	}
 
@@ -304,18 +305,52 @@ func estimacionLegible(puntos int) string {
 //
 // Un titulo con saltos romperia la alineacion de la tabla y la haria ilegible.
 func tituloEnLinea(titulo string) string {
-	reemplazado := strings.ReplaceAll(titulo, "\n", " ")
+	reemplazado := strings.ReplaceAll(titulo, "\r\n", " ")
+	reemplazado = strings.ReplaceAll(reemplazado, "\n", " ")
 	reemplazado = strings.ReplaceAll(reemplazado, "\r", " ")
 	reemplazado = strings.ReplaceAll(reemplazado, "\t", " ")
 
-	return strings.TrimSpace(reemplazado)
+	// Sustituir salto por salto deja el "\r\n" de Windows como DOS espacios,
+	// que desalinean la tabla igual que lo hacia un salto de linea. Se
+	// colapsan las rachas: en una tabla, un hueco multiple y un hueco simple
+	// se leen igual y el segundo no empuja las columnas.
+	return strings.TrimSpace(reemplazarEspacios(reemplazado))
 }
 
 // modoDe devuelve el modo de salida como texto.
+// El resultado puede llegar nil cuando el pipeline no llego a construir uno,
+// y renderizar un nil aqui tumbaba el proceso entero en la etapa de PRESENTACION,
+// es decir, despues de haber hecho el trabajo bien.
 func modoDe(resultado *application.PipelineResultado) string {
-	if resultado.Despacho == nil {
+	if resultado == nil || resultado.Despacho == nil {
 		return "desconocido"
 	}
 
 	return string(resultado.Despacho.Modo)
+}
+
+// reemplazarEspacios colapsa rachas de espacios y tabuladores en un solo
+// espacio.
+func reemplazarEspacios(texto string) string {
+	var b strings.Builder
+
+	b.Grow(len(texto))
+
+	espacioPendiente := false
+
+	for _, r := range texto {
+		if r == ' ' || r == '\t' {
+			espacioPendiente = b.Len() > 0
+			continue
+		}
+
+		if espacioPendiente {
+			b.WriteRune(' ')
+			espacioPendiente = false
+		}
+
+		b.WriteRune(r)
+	}
+
+	return b.String()
 }
